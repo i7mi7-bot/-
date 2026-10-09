@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#d0d0b8">
+<title>纵使相逢应不识 · 记忆的消逝</title>
+<style>
+*{box-sizing:border-box}
+html{background:#333b32}
+body{margin:0;min-height:100svh;padding:28px 16px;display:grid;place-items:center;gap:12px}
+.poster{position:relative;width:min(840px,100%);aspect-ratio:420/594;overflow:hidden;background:#d0d0b8;box-shadow:0 12px 65px #111a1840}
+canvas{display:block;width:100%;height:100%}
+.help{margin:0;color:#c4c9b9;font:12px/1.8 "Microsoft YaHei",sans-serif;letter-spacing:.06em;text-align:center}
+.notice{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);padding:9px 16px;background:#18221de6;color:#edf0e4;border-radius:6px;font:13px/1.5 sans-serif;pointer-events:none;opacity:0;transition:opacity .2s;z-index:2}
+.notice.visible{opacity:1}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}
+@media(max-width:600px){body{padding:0}.poster{box-shadow:none}}
+@media print{@page{size:A2 portrait;margin:0}html,body{background:none;margin:0;padding:0}.poster{width:420mm;height:594mm;box-shadow:none;break-inside:avoid}.help,.notice{display:none}}
+</style>
+</head>
+<body>
+<main class="poster" aria-labelledby="poster-title">
+<h1 id="poster-title" class="sr-only">纵使相逢应不识</h1>
+<p class="sr-only">记忆的消逝。六栋依照线稿排列的粒子房屋，灰绿色浓墨在宣纸上柔化晕散，房屋相交处积墨变深，细小颗粒持续不规则漂移。鼠标划过或停留时，粒子向外大幅洇开，局部墨色被持续稀释；移开后不恢复，洇开的墨粒缓慢下落并留下水痕。</p>
+<canvas id="scene" aria-hidden="true"></canvas>
+</main>
+<p class="help">右键切换配色 · S 保存当前帧 · 刷新重新开始</p>
+<div class="notice" id="notice" role="status" aria-live="polite"></div>
+<script>
+(()=>{
+'use strict';
+const W=840,H=1188;
+const canvas=document.getElementById('scene');
+const ctx=canvas.getContext('2d',{alpha:false});
+const rawFrame=document.createElement('canvas'),rawCtx=rawFrame.getContext('2d',{alpha:false});
+const palettes=[
+ {name:'灰绿宣纸',slug:'sage',filter:'none',background:'#333b32'},
+ {name:'黑白明度',slug:'monochrome',filter:'grayscale(1)',background:'#343434'},
+ {name:'反色',slug:'inverted',filter:'invert(1)',background:'#ccc4cd'}
+];
+let paletteIndex=0,noticeTimer=0,exporting=false;
+function showNotice(message){
+ const node=document.getElementById('notice');node.textContent=message;node.classList.add('visible');
+ clearTimeout(noticeTimer);noticeTimer=setTimeout(()=>node.classList.remove('visible'),2200);
+}
+function presentFrame(){
+ ctx.setTransform(1,0,0,1,0,0);ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';
+ ctx.filter=palettes[paletteIndex].filter;ctx.drawImage(rawFrame,0,0);ctx.filter='none';
+}
+function cyclePalette(event){
+ event.preventDefault();paletteIndex=(paletteIndex+1)%palettes.length;
+ document.documentElement.style.background=palettes[paletteIndex].background;
+ document.querySelector('.help').style.color=paletteIndex===2?'#45403f':'#c4c9b9';
+ presentFrame();showNotice(palettes[paletteIndex].name);
+}
+function exportFrame(){
+ if(exporting)return;exporting=true;
+ // Capture the displayed bitmap now, including palette and accumulated ink.
+ // The asynchronous PNG encoder cannot advance this snapshot to a later frame.
+ const snapshot=document.createElement('canvas');snapshot.width=canvas.width;snapshot.height=canvas.height;
+ snapshot.getContext('2d').drawImage(canvas,0,0);
+ const slug=palettes[paletteIndex].slug;
+ const stamp=new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date()).replace(/[^0-9]/g,'');
+ try{
+  snapshot.toBlob(blob=>{
+   exporting=false;if(!blob){showNotice('保存失败，请重试');return;}
+   const url=URL.createObjectURL(blob),link=document.createElement('a');
+   link.href=url;link.download='记忆的消逝-'+slug+'-'+stamp+'.png';document.body.appendChild(link);link.click();link.remove();
+   setTimeout(()=>URL.revokeObjectURL(url),60000);showNotice('已导出当前帧 PNG');
+  },'image/png');
+ }catch(error){exporting=false;showNotice('保存失败，请重试');}
+}
+canvas.addEventListener('contextmenu',cyclePalette);
+addEventListener('keydown',event=>{
+ const target=event.target;
+ if(event.key.toLowerCase()!=='s'||event.repeat||event.ctrlKey||event.metaKey||event.altKey||target?.isContentEditable||/^(INPUT|TEXTAREA|SELECT)$/.test(target?.tagName||''))return;
+ event.preventDefault();exportFrame();
+});
+function surface(){const c=document.createElement('canvas');c.width=W;c.height=H;return c;}
+const paper=surface(),base=surface(),moving=surface(),fibers=surface();
+const bg=paper.getContext('2d'),fixed=base.getContext('2d'),motion=moving.getContext('2d'),fiber=fibers.getContext('2d');
+const preference=matchMedia('(prefers-reduced-motion: reduce)');
+let dpr=1,raf=0,lastTime=null,lastFrame=-100,elapsed=0;
+function seeded(seed){return()=>{seed|=0;seed=seed+0x6D2B79F5|0;let t=Math.imul(seed^seed>>>15,1|seed);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+const random=seeded(720163),range=(a,b)=>a+random()*(b-a);
+const clamp=(n,a=0,b=1)=>Math.max(a,Math.min(b,n));
+const box=(x,y,w,h)=>[[x,y],[x+w,y],[x+w,y+h],[x,y+h]];
+// Six silhouettes traced from the supplied drawing. Coordinates preserve its
+// sloping upper roof, asymmetrical openings and interlocking lower houses.
+const houses=[
+ {name:'左侧长屋',roof:[[67,277],[154,204],[344,204],[370,277]],body:box(86,277,284,103),chimney:box(137,193,13,48),openings:[box(118,329,39,51),box(245,306,34,34),box(298,306,34,34)],density:.89},
+ {name:'斜顶高屋',roof:[[273,165],[474,118],[487,165]],body:box(326,165,148,190),chimney:box(363,130,12,25),openings:[box(347,193,33,52),box(435,193,27,43),box(417,301,26,54)],density:.90},
+ {name:'右侧梯顶',roof:[[487,260],[521,215],[725,215],[746,260]],body:box(511,260,208,284),chimney:box(673,193,28,43),openings:[box(551,340,62,62),box(647,437,44,107)],density:.84},
+ {name:'中央宽屋',roof:[[175,410],[347,340],[567,410]],body:box(202,410,333,188),chimney:box(274,354,24,40),openings:[box(231,437,84,72),box(417,437,77,67),box(347,514,47,84)],density:.96},
+ {name:'右下山墙',roof:[[474,509],[590,410],[706,509]],body:box(474,509,232,199),chimney:null,openings:[box(609,460,22,37),box(609,581,23,36),box(655,581,27,36),box(609,641,46,67)],density:.87},
+ {name:'下方小屋',roof:[[375,635],[430,561],[551,561],[590,635]],body:box(400,635,165,176),chimney:box(430,544,23,33),openings:[box(501,652,50,50),box(430,751,44,60)],density:.89}
+];
+const transform=poly=>poly.map(([x,y])=>[x*.99+15,y*.99+55]);
+for(const h of houses){
+ h.roof=transform(h.roof);h.body=transform(h.body);h.chimney=h.chimney?transform(h.chimney):null;h.openings=h.openings.map(transform);
+ h.shapes=[h.roof,h.body,...(h.chimney?[h.chimney]:[])];
+ const points=h.shapes.flat();h.bounds=[Math.floor(Math.min(...points.map(p=>p[0]))-12),Math.floor(Math.min(...points.map(p=>p[1]))-12),Math.ceil(Math.max(...points.map(p=>p[0]))+12),Math.ceil(Math.max(...points.map(p=>p[1]))+12)];
+}
+function inside(x,y,poly){let hit=false;for(let i=0,j=poly.length-1;i<poly.length;j=i++){const a=poly[i],b=poly[j];if((a[1]>y)!==(b[1]>y)&&x<(b[0]-a[0])*(y-a[1])/(b[1]-a[1])+a[0])hit=!hit;}return hit;}
+function signedDistance(x,y,poly){
+ let distance=1e10;
+ for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+  const a=poly[i],b=poly[j],dx=b[0]-a[0],dy=b[1]-a[1],t=clamp(((x-a[0])*dx+(y-a[1])*dy)/(dx*dx+dy*dy));
+  distance=Math.min(distance,(x-a[0]-t*dx)**2+(y-a[1]-t*dy)**2);
+ }
+ return Math.sqrt(distance)*(inside(x,y,poly)?1:-1);
+}
+function distanceAt(x,y,h){let d=Math.max(...h.shapes.map(p=>signedDistance(x,y,p)));for(const p of h.openings)d=Math.min(d,-signedDistance(x,y,p));return d;}
+function hash(x,y,seed=0){let h=Math.imul(x+seed*331,374761393)+Math.imul(y,668265263);h=Math.imul(h^h>>>13,1274126177);return((h^h>>>16)>>>0)/4294967295;}
+function noise(x,y,scale,seed=0){
+ x/=scale;y/=scale;const ix=Math.floor(x),iy=Math.floor(y);let fx=x-ix,fy=y-iy;fx=fx*fx*(3-2*fx);fy=fy*fy*(3-2*fy);
+ return(hash(ix,iy,seed)*(1-fx)+hash(ix+1,iy,seed)*fx)*(1-fy)+(hash(ix,iy+1,seed)*(1-fx)+hash(ix+1,iy+1,seed)*fx)*fy;
+}
+// Gradient Perlin noise with quintic interpolation: smooth velocity changes,
+// without the repeated orbits of sine-based motion.
+const permutation=new Uint8Array(512);
+{
+ const r=seeded(18491),values=Array.from({length:256},(_,i)=>i);
+ for(let i=255;i>0;i--){const j=Math.floor(r()*(i+1));[values[i],values[j]]=[values[j],values[i]];}
+ for(let i=0;i<512;i++)permutation[i]=values[i&255];
+}
+const fade=t=>t*t*t*(t*(t*6-15)+10);
+function gradient(h,x,y){switch(h&7){case 0:return x;case 1:return -x;case 2:return y;case 3:return -y;case 4:return (x+y)*.7071;case 5:return (x-y)*.7071;case 6:return (-x+y)*.7071;default:return (-x-y)*.7071;}}
+function perlin(x,y){
+ const ix=Math.floor(x),iy=Math.floor(y),X=ix&255,Y=iy&255,fx=x-ix,fy=y-iy,u=fade(fx),v=fade(fy);
+ const a=permutation[X]+Y,b=permutation[X+1]+Y;
+ const top=gradient(permutation[a],fx,fy)*(1-u)+gradient(permutation[b],fx-1,fy)*u;
+ const bottom=gradient(permutation[a+1],fx,fy-1)*(1-u)+gradient(permutation[b+1],fx-1,fy-1)*u;
+ return (top*(1-v)+bottom*v)*1.4142;
+}
+// A compact moving noise field gives nearby grains related but unequal drift.
+// Anchored displacements are bounded, so doors and silhouettes never disperse.
+const FLOW=12,COLS=Math.ceil(W/FLOW)+2,ROWS=Math.ceil(H/FLOW)+2;
+const fieldX=new Float32Array(COLS*ROWS),fieldY=new Float32Array(COLS*ROWS);
+function updateFlow(time){
+ const t=time*.23;
+ for(let y=0;y<ROWS;y++)for(let x=0;x<COLS;x++){
+  const nx=x*.23,ny=y*.23,i=y*COLS+x;
+  fieldX[i]=perlin(nx+t,ny-t*.41)*.72+perlin(nx*2.13-t*.63,ny*2.13+t*.83+19)*.28;
+  fieldY[i]=perlin(nx-t*.37+83,ny+t*.91+47)*.72+perlin(nx*2.13+t*.79+31,ny*2.13-t*.57)*.28;
+ }
+}
+function displacement(p){
+ const i=p.flowIndex,a=p.flowX,b=p.flowY;
+ const x=(fieldX[i]*(1-a)+fieldX[i+1]*a)*(1-b)+(fieldX[i+COLS]*(1-a)+fieldX[i+COLS+1]*a)*b;
+ const y=(fieldY[i]*(1-a)+fieldY[i+1]*a)*(1-b)+(fieldY[i+COLS]*(1-a)+fieldY[i+COLS+1]*a)*b;
+ return [x*p.amplitude,y*p.amplitude];
+}
+function makePaper(){
+ const pixels=bg.createImageData(W,H),data=pixels.data;
+ for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+  const i=(y*W+x)*4;
+  const cloudy=(noise(x,y,180,8)-.5)*14+(noise(x,y,47,9)-.5)*6;
+  const pulp=(noise(x,y,5,10)-.5)*5+(hash(x,y,11)-.5)*10;
+  const edge=Math.pow(Math.max(Math.abs(x-W/2)/(W/2),Math.abs(y-H/2)/(H/2)),5)*6;
+  const n=cloudy+pulp-edge;
+  data[i]=207+n;data[i+1]=209+n;data[i+2]=185+n;data[i+3]=255;
+ }
+ bg.putImageData(pixels,0,0);
+ // Long irregular fibers and shorter pulp strands, with no repeating tile.
+ for(let i=0;i<23000;i++){
+  const x=range(0,W),y=range(0,H),a=range(0,Math.PI),len=range(1.2,i%9===0?23:8);
+  fiber.strokeStyle=i%3?'rgba(245,240,209,.12)':'rgba(82,91,62,.09)';fiber.lineWidth=range(.22,.60);
+  fiber.beginPath();fiber.moveTo(x,y);fiber.quadraticCurveTo(x+Math.cos(a)*len*.5+range(-1.5,1.5),y+Math.sin(a)*len*.5,x+Math.cos(a)*len,y+Math.sin(a)*len);fiber.stroke();
+ }
+ bg.drawImage(fibers,0,0);
+}
+const particles=[];
+const batches=Array.from({length:18},()=>[]);
+// Persistent water dose and displaced pigment; there is no restoring spring.
+const pointer={x:-9999,y:-9999,active:false,dwell:0};
+const strokes=[];
+const WATER=6,WW=Math.ceil(W/WATER),WH=Math.ceil(H/WATER);
+const water=new Float32Array(WW*WH),waterX=new Float32Array(WW*WH),waterY=new Float32Array(WW*WH);
+const mask=document.createElement('canvas');mask.width=WW;mask.height=WH;
+const maskCtx=mask.getContext('2d'),maskPixels=maskCtx.createImageData(WW,WH);
+const washedPaper=surface(),washCtx=washedPaper.getContext('2d');
+const stains=surface(),stainCtx=stains.getContext('2d');
+const typography=surface();
+const halo=document.createElement('canvas');halo.width=32;halo.height=32;
+const haloCtx=halo.getContext('2d'),haloGradient=haloCtx.createRadialGradient(16,16,0,16,16,16);
+haloGradient.addColorStop(0,'rgba(43,61,37,.20)');haloGradient.addColorStop(.4,'rgba(60,78,49,.09)');haloGradient.addColorStop(1,'rgba(60,78,49,0)');
+haloCtx.fillStyle=haloGradient;haloCtx.fillRect(0,0,32,32);
+let simulationTime=0;
+function canvasPoint(event){const rect=canvas.getBoundingClientRect();return [(event.clientX-rect.left)*W/rect.width,(event.clientY-rect.top)*H/rect.height];}
+function houseAt(x,y){return houses.some(h=>distanceAt(x,y,h)>-6);}
+function pointerMove(event){
+ const [x,y]=canvasPoint(event);
+ if(pointer.active){
+  const length=Math.hypot(x-pointer.x,y-pointer.y),steps=Math.min(32,Math.ceil(length/10));
+  if(length>8)pointer.dwell=0;
+  for(let i=1;i<=steps;i++){const t=i/steps;strokes.push({x:pointer.x+(x-pointer.x)*t,y:pointer.y+(y-pointer.y)*t});}
+ }else{strokes.push({x,y});pointer.dwell=0;}
+ pointer.x=x;pointer.y=y;pointer.active=true;
+ if(strokes.length>96)strokes.splice(0,strokes.length-96);
+ resume();
+}
+function pointerLeave(){pointer.active=false;pointer.dwell=0;}
+canvas.addEventListener('pointermove',pointerMove,{passive:true});
+canvas.addEventListener('pointerleave',pointerLeave,{passive:true});
+canvas.addEventListener('pointercancel',pointerLeave,{passive:true});
+canvas.addEventListener('pointerdown',event=>{if(event.button!==2)pointerMove(event);},{passive:true});
+canvas.addEventListener('pointerup',e=>{if(e.pointerType!=='mouse')pointerLeave();},{passive:true});
+addEventListener('blur',pointerLeave);
+function soak(x,y,amount,radius){
+ if(!houseAt(x,y))return false;
+ const left=Math.max(0,Math.floor((x-radius)/WATER)),right=Math.min(WW-1,Math.ceil((x+radius)/WATER));
+ const top=Math.max(0,Math.floor((y-radius)/WATER)),bottom=Math.min(WH-1,Math.ceil((y+radius)/WATER));
+ for(let gy=top;gy<=bottom;gy++)for(let gx=left;gx<=right;gx++){
+  const dx=(gx+.5)*WATER-x,dy=(gy+.5)*WATER-y,d=Math.hypot(dx,dy);
+  const irregular=1+(noise(gx,gy,4,184)-.5)*.22;
+  const weight=clamp(1-d/(radius*irregular));if(!weight)continue;
+  const i=gy*WW+gx,old=water[i],add=amount*weight*weight;
+  water[i]=Math.min(14,old+add);
+  if(water[i]>old){waterX[i]=(waterX[i]*old+x*add)/(old+add);waterY[i]=(waterY[i]*old+y*add)/(old+add);}
+ }
+ return true;
+}
+function updateWater(dt){
+ let dirty=false;
+ for(const point of strokes)dirty=soak(point.x,point.y,.24,42)||dirty;
+ strokes.length=0;
+ if(pointer.active&&dt>0){
+  pointer.dwell+=dt;
+  dirty=soak(pointer.x,pointer.y,dt*2.5,42+Math.min(88,pointer.dwell*9))||dirty;
+ }
+ if(!dirty)return;
+ for(let i=0;i<water.length;i++)maskPixels.data[i*4+3]=Math.round((1-Math.exp(-water[i]*1.35))*255);
+ maskCtx.putImageData(maskPixels,0,0);
+ washCtx.globalCompositeOperation='source-over';washCtx.clearRect(0,0,W,H);washCtx.drawImage(paper,0,0);
+ washCtx.globalCompositeOperation='destination-in';washCtx.filter='blur(4px)';washCtx.drawImage(mask,0,0,W,H);washCtx.filter='none';washCtx.globalCompositeOperation='source-over';
+}
+function advanceParticle(p,dt,time){
+ const dose=water[p.waterIndex],wet=1-Math.exp(-dose*1.35),added=Math.max(0,wet-p.wet);
+ if(added>.00001){
+  let dx=p.x-waterX[p.waterIndex],dy=p.y-waterY[p.waterIndex],distance=Math.hypot(dx,dy);
+  if(distance<.1){dx=Math.cos(p.seed*6.28);dy=Math.sin(p.seed*6.28);distance=1;}
+  const nx=dx/distance,ny=dy/distance,spread=85+p.seed*75;
+  p.ox+=nx*spread*added;p.oy+=ny*spread*added;
+  p.vx+=nx*90*added;p.vy+=ny*56*added;
+  p.wet=wet;
+ }
+ if(p.wet<.001||dt<=0)return;
+ const oldX=p.x+p.ox,oldY=p.y+p.oy;
+ const drag=Math.exp(-dt*1.5);p.vx*=drag;
+ const target=(2.5+noise(p.x,0,24,218)*8)*p.wet;
+ p.vy=target+(p.vy-target)*Math.exp(-dt*1.15);
+ p.ox+=(p.vx+perlin(p.x*.014,time*.14)*p.wet*1.8)*dt;
+ p.oy+=p.vy*dt;
+ p.ox=clamp(p.ox,8-p.x,W-8-p.x);p.oy=Math.min(p.oy,H-9-p.y);
+ if(p.tracer&&Math.hypot(p.ox+p.x-oldX,p.oy+p.y-oldY)>.025){
+  stainCtx.strokeStyle='rgba(47,64,38,'+(p.category<9?.026:.014)+')';stainCtx.lineWidth=.6+p.r*.65;
+  stainCtx.beginPath();stainCtx.moveTo(oldX,oldY);stainCtx.lineTo(p.x+p.ox,p.y+p.oy);stainCtx.stroke();
+ }
+}
+function makeInk(){
+ fixed.drawImage(paper,0,0);
+ // Each house deposits its own pigment. Multiply darkens intersections.
+ fixed.globalCompositeOperation='multiply';
+ houses.forEach((h,index)=>{
+  const layer=surface(),lc=layer.getContext('2d'),pixels=lc.createImageData(W,H),data=pixels.data;
+  const [left,top,right,bottom]=h.bounds;
+  for(let y=top;y<bottom;y++)for(let x=left;x<right;x++){
+   const d=distanceAt(x,y,h),edgeNoise=(noise(x,y,7,index+20)-.5)*4.8;
+   const coverage=clamp(.5+(d+edgeNoise)/9);
+   if(!coverage)continue;
+   const cloudy=noise(x,y,57,index+31)*.48+noise(x,y,18,index+41)*.32+noise(x,y,4,index+51)*.20;
+   const inRoof=inside(x,y,h.roof)||(h.chimney&&inside(x,y,h.chimney));
+   const grain=hash(x,y,index+70);
+   const opacity=coverage*h.density*(inRoof?.76:.34)*(.70+cloudy*.53)*(.58+grain*.52);
+   const i=(y*W+x)*4,tone=(cloudy-.5)*15;
+   data[i]=48+tone;data[i+1]=62+tone;data[i+2]=43+tone;data[i+3]=Math.round(clamp(opacity)*255);
+  }
+  lc.putImageData(pixels,0,0);fixed.drawImage(layer,0,0);
+  // Moving grains use the same silhouettes, softly scattered at the boundaries.
+  for(let y=top;y<bottom;y+=1.75)for(let x=left;x<right;x+=1.75){
+   const px=x+range(-1.05,1.05),py=y+range(-1.05,1.05),d=distanceAt(px,py,h);
+   if(random()>clamp((d+5)/10)*.88)continue;
+   const isRoof=inside(px,py,h.roof)||(h.chimney&&inside(px,py,h.chimney));
+   const category=Math.floor(range(0,9))+(isRoof?0:9);
+   const gx=px/FLOW,gy=py/FLOW;
+   const p={x:px,y:py,r:range(.43,1.35),amplitude:range(4.5,8.6),flowIndex:Math.floor(gy)*COLS+Math.floor(gx),flowX:gx%1,flowY:gy%1,category};
+   p.waterIndex=Math.floor(py/WATER)*WW+Math.floor(px/WATER);p.wet=0;p.ox=0;p.oy=0;p.vx=0;p.vy=0;p.seed=hash(Math.floor(px),Math.floor(py),index+330);p.tracer=p.seed<.032;
+   particles.push(p);batches[category].push(p);
+  }
+ });
+ fixed.globalCompositeOperation='source-over';
+ fixed.globalAlpha=.48;fixed.drawImage(fibers,0,0);fixed.globalAlpha=1;
+ drawType();
+}
+function drawType(){
+ const fixed=typography.getContext('2d');
+ const letters=surface(),lc=letters.getContext('2d');
+ lc.fillStyle='#20291f';lc.strokeStyle='#20291f';lc.lineWidth=.65;lc.lineJoin='round';lc.textAlign='center';lc.textBaseline='middle';
+ lc.font='900 61px "Songti SC","SimSun","Noto Serif CJK SC",serif';
+ [...'纵使相逢应不识'].forEach((c,i)=>{lc.fillText(c,115,695+i*61);lc.strokeText(c,115,695+i*61);});
+ const original=lc.getImageData(0,0,W,H),sharp=surface(),mist=surface();
+ const sc=sharp.getContext('2d'),mc=mist.getContext('2d');
+ const crisp=sc.createImageData(W,H),soft=mc.createImageData(W,H);
+ // Selected areas lose their crisp strokes and remain only as diffused ink.
+ const patches=[[-16,-15,13],[15,9,15],[-5,15,12],[14,-14,15],[-16,6,12],[10,-12,14],[15,13,14]];
+ for(let y=651;y<1100;y++)for(let x=70;x<160;x++){
+  const warpX=Math.round(x+(noise(x,y,8,97)-.5)*1.5),warpY=Math.round(y+(noise(x,y,9,98)-.5)*1.5);
+  const alpha=original.data[(warpY*W+warpX)*4+3]/255;
+  if(!alpha)continue;
+  const glyph=clamp(Math.round((y-695)/61),0,6),cy=695+glyph*61,p=patches[glyph];
+  const d=((x-115-p[0])**2+(y-cy-p[1])**2)/(p[2]*p[2]);
+  const d2=((x-115+p[0]*.5)**2+(y-cy+p[1]*.9)**2)/90;
+  const dissolve=clamp(Math.exp(-d*.65)*1.35+Math.exp(-d2)*.55);
+  const grain=.88+hash(x,y,112)*.12,i=(y*W+x)*4;
+  crisp.data[i]=32;crisp.data[i+1]=42;crisp.data[i+2]=30;
+  crisp.data[i+3]=alpha*(1-dissolve)*grain*255;
+  soft.data[i]=43;soft.data[i+1]=55;soft.data[i+2]=38;
+  soft.data[i+3]=alpha*(.10+dissolve*.9)*255;
+ }
+ sc.putImageData(crisp,0,0);mc.putImageData(soft,0,0);
+ fixed.save();fixed.filter='blur(4.2px)';fixed.globalAlpha=.56;fixed.drawImage(mist,0,0);
+ fixed.filter='blur(1.7px)';fixed.globalAlpha=.55;fixed.drawImage(mist,0,0);
+ fixed.filter='none';fixed.globalAlpha=1;fixed.drawImage(sharp,0,0);fixed.restore();
+ fixed.textAlign='center';fixed.textBaseline='middle';
+ fixed.font='16px "Songti SC","SimSun","Noto Serif CJK SC",serif';fixed.fillStyle='#59664b';
+ [...'记忆的消逝'].forEach((c,i)=>fixed.fillText(c,177,702+i*25));
+}
+function render(time){
+ const dt=clamp(time-simulationTime,0,.12);simulationTime=time;
+ updateFlow(preference.matches?0:time);updateWater(dt);
+ motion.clearRect(0,0,W,H);
+ for(let b=0;b<batches.length;b++){
+  const color=['#263623','#3d4b31','#5c6948'][b%3],opacity=[.23,.34,.45][Math.floor((b%9)/3)]*(b<9?1:.50);
+  motion.fillStyle=color;
+  for(const p of batches[b]){
+   advanceParticle(p,dt,time);
+   const drift=displacement(p),x=p.x+p.ox+drift[0],y=p.y+p.oy+drift[1];
+   if(p.wet>.02&&p.seed<.22){
+    const radius=5+p.wet*10;motion.globalAlpha=p.wet*(b<9?.44:.24);motion.drawImage(halo,x-radius,y-radius,radius*2,radius*2);
+   }
+   motion.globalAlpha=opacity*(1-p.wet*.68);
+   const size=p.r*1.7*(1+p.wet*.7);motion.fillRect(x-size/2,y-size/2,size,size*.93);
+   if(p.tracer&&p.wet>.1){
+    motion.globalAlpha=(b<9?.19:.10)*p.wet;motion.beginPath();motion.ellipse(x,y,1+p.r,2.2+p.r*1.8,0,0,Math.PI*2);motion.fill();
+   }
+  }
+ }
+ motion.globalAlpha=1;
+ rawCtx.setTransform(dpr,0,0,dpr,0,0);rawCtx.globalCompositeOperation='source-over';rawCtx.drawImage(base,0,0);rawCtx.drawImage(washedPaper,0,0);
+ rawCtx.globalCompositeOperation='multiply';rawCtx.drawImage(stains,0,0);rawCtx.filter='blur(0.38px)';rawCtx.drawImage(moving,0,0);rawCtx.filter='none';rawCtx.globalCompositeOperation='source-over';rawCtx.drawImage(typography,0,0);
+ presentFrame();
+}
+function frame(now){
+ if(document.hidden){raf=0;lastTime=null;return;}
+ if(lastTime!==null)elapsed+=Math.min((now-lastTime)/1000,.1);lastTime=now;
+ if(now-lastFrame>=40){render(elapsed);lastFrame=now;}
+ raf=(!preference.matches||pointer.active||particles.some(p=>p.wet>.001))?requestAnimationFrame(frame):0;
+}
+function resize(){dpr=Math.min(devicePixelRatio||1,2);canvas.width=Math.round(W*dpr);canvas.height=Math.round(H*dpr);rawFrame.width=canvas.width;rawFrame.height=canvas.height;render(elapsed);}
+function resume(){if(!raf&&!document.hidden){lastTime=null;raf=requestAnimationFrame(frame);}}
+makePaper();makeInk();resize();resume();
+addEventListener('resize',resize,{passive:true});
+document.addEventListener('visibilitychange',resume);
+preference.addEventListener('change',()=>{render(elapsed);resume();});
+})();
+</script>
+</body>
+</html>
